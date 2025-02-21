@@ -1,3 +1,5 @@
+import os
+
 import requests
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
@@ -49,6 +51,11 @@ class YandexCloudService(AbstractCloudService):
                   "result": False},
         }
 
+    @staticmethod
+    def __check_file(path) -> None:
+        if not os.path.exists(path) or os.path.isdir(path):
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
+
     def __get_response_message(self, code) -> Dict[str, Any]:
         try:
             response = self.__status_codes[code]
@@ -76,6 +83,8 @@ class YandexCloudService(AbstractCloudService):
         return {"url": response_data["href"], "result": True}
 
     def __upload_file(self, path: str, overwrite: bool = False) -> Dict[str, Any]:
+        self.__check_file(path)
+
         target_url = self.__get_target_url(path, overwrite)
         if not target_url["result"]:
             return target_url
