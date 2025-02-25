@@ -2,6 +2,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from cloud_services import ChecksService
 
 load_dotenv()
 
@@ -13,17 +14,20 @@ def get_env_variable(var_name: str) -> str:
     return value
 
 
-def check_if_path_exist(path: str) -> str:
-    check = os.path.exists(path)
-    if not check:
-        raise FileNotFoundError(f"Directory '{path}' wasn't found!")
-    return path
-
-
 try:
-    LOCAL_DIR_PATH = check_if_path_exist(get_env_variable("LOCAL_DIR_PATH"))
-    CLOUD_DIR_NAME = get_env_variable("CLOUD_DIR_NAME")
+    LOCAL_DIR_PATH = get_env_variable("LOCAL_DIR_PATH")
+    try:
+        ChecksService.check_dir(LOCAL_DIR_PATH)
+    except NotADirectoryError as not_dir_err:
+        raise EnvironmentError(f"Env variable: {'LOCAL_DIR_PATH'} {not_dir_err}")
+    except FileNotFoundError as not_found_err:
+        raise EnvironmentError(f"Env variable: {'LOCAL_DIR_PATH'} {not_found_err}")
+
     CLOUD_TOKEN = get_env_variable("CLOUD_TOKEN")
+    if not ChecksService.check_token(CLOUD_TOKEN, url="https://cloud-api.yandex.net/v1/disk/resources"):
+        raise EnvironmentError(f"Env variable: {'CLOUD_TOKEN'} is invalid! Check your API key.")
+
+    CLOUD_DIR_NAME = get_env_variable("CLOUD_DIR_NAME")
     SYNC_PERIOD = get_env_variable("SYNC_PERIOD")
     LOG_FILE_PATH = get_env_variable("LOG_FILE_PATH")
 except FileNotFoundError as err:
