@@ -1,8 +1,9 @@
 import os
-
 import requests
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
+
+import loguru
 
 
 class AbstractCloudService(ABC):
@@ -55,7 +56,7 @@ class ChecksService:
 
 
 class YandexCloudService(AbstractCloudService, ChecksService):
-    def __init__(self, token: str, remote_dir_name: str) -> None:
+    def __init__(self, token: str, remote_dir_name: str, logger: loguru.logger) -> None:
         self.__access_token = token
         self.__remote_dir_name = remote_dir_name
         self.__base_url = "https://cloud-api.yandex.net/v1/disk/resources"
@@ -78,6 +79,7 @@ class YandexCloudService(AbstractCloudService, ChecksService):
             517: {"status_code": 517, "message": "Для загрузки файла не хватает места на Диске пользователя.",
                   "result": False},
         }
+        self.__logger = logger
 
     def __get_response_message(self, code) -> Dict[str, Any]:
         try:
@@ -86,11 +88,9 @@ class YandexCloudService(AbstractCloudService, ChecksService):
             response = {"status_code": code, "message": "Произошло нечто непредвиденное.", "result": False}
         return response
 
-    def __get_target_url(self, path, overwrite: bool = False) -> Dict[str, Any]:
-        file_path = f"{self.__remote_dir_name}/{path.split('/')[-1]}"
-
+    def __get_target_url(self, remote_path, overwrite: bool = False) -> Dict[str, Any]:
         request = requests.get(
-            url=f"{self.__base_url}/upload?path={file_path}&overwrite={str(overwrite).lower()}",
+            url=f"{self.__base_url}/upload?path={remote_path}&overwrite={str(overwrite).lower()}",
             headers=self.__headers,
         )
         response_data: dict = request.json()
@@ -101,31 +101,69 @@ class YandexCloudService(AbstractCloudService, ChecksService):
 
     def __upload_file(self, path: str, overwrite: bool = False) -> Dict[str, Any]:
         super().check_file(path)
+        cloud_dir_file_path = f"{self.__remote_dir_name}/{path.split('/')[-1]}"
 
-        target_url = self.__get_target_url(path, overwrite)
+        target_url = self.__get_target_url(cloud_dir_file_path, overwrite)
         if not target_url["result"]:
             return target_url
 
         with open(path, "rb") as file:
-            response = requests.put(target_url["url"], headers=self.__headers, data=file)
-        return self.__get_response_message(response.status_code)
+            request = requests.put(target_url["url"], headers=self.__headers, data=file)
+        return self.__get_response_message(request.status_code)
 
     def load(self, path) -> Dict[str, Any]:
-        return self.__upload_file(path)
+        try:
+            result = self.__upload_file(path)
+            filename = path.split('/')[-1]
+
+            if result["status_code"] == 201:
+                self.__logger.info(f"Файл '{filename}' успешно загружен.")
+            else:
+                self.__logger.error(
+                    f"Файл '{filename}' не загружен! {result['message']} code:{result['status_code']}"
+                )
+            return result
+        except Exception as exp:
+            self.__logger.exception(exp)
+            return {"status_code": 500, "message": exp}
 
     def reload(self, path) -> Dict[str, Any]:
-        return self.__upload_file(path, overwrite=True)
+        try:
+            result = self.__upload_file(path, overwrite=True)
+            filename = path.split('/')[-1]
+
+            if result["status_code"] == 201:
+                self.__logger.info(f"Файл '{filename}' успешно перезаписан.")
+            else:
+                self.__logger.error(
+                    f"Файл '{filename}' не перезаписан! {result['message']} code:{result['status_code']}"
+                )
+            return result
+        except Exception as exp:
+            self.__logger.exception(exp)
+            return {"status_code": 500, "message": exp}
 
     def delete(self, filename) -> Dict[str, Any]:
         file_path = f"{self.__remote_dir_name}/{filename}"
+
         try:
             request = requests.delete(
                 url=f"{self.__base_url}?path={file_path}&permanently=false",
                 headers=self.__headers,
             )
-            return self.__get_response_message(request.status_code)
+            response = self.__get_response_message(request.status_code)
+
+            if response["status_code"] == 202:
+                self.__logger.info(f"Файл '{filename}' успешно удален.")
+            elif response["status_code"] == 204:
+                self.__logger.info(f"Запрос на удаление файла '{filename}' принят сервером, но ещё не обработан.")
+            else:
+                self.__logger.error(
+                    f"Файл '{filename}' не удален! {response['message']} code:{response['status_code']}"
+                )
+            return response
         except Exception as exp:
-            #logging
+            self.__logger.exception(exp)
             return {"status_code": 500, "message": exp}
 
     def get_info(self) -> Dict[str, Any]:
@@ -151,5 +189,5 @@ class YandexCloudService(AbstractCloudService, ChecksService):
             else:
                 return self.__get_response_message(request.status_code)
         except Exception as exp:
-            #logging
+            self.__logger.exception(exp)
             return {"status_code": 500, "message": exp}
