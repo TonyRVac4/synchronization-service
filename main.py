@@ -1,20 +1,25 @@
 import os
+import sys
 import time
 from multiprocessing.pool import ThreadPool
 from typing import Set, List
-from logger import logger
-from config import CLOUD_DIR_NAME, CLOUD_TOKEN, SYNC_PERIOD, LOCAL_DIR_PATH
+
+from requests.exceptions import ConnectionError
+
+from config import CLOUD_DIR_NAME, CLOUD_TOKEN, SYNC_PERIOD, LOCAL_DIR_PATH, print_to_stderr
 from cloud_services import YandexCloudService
+from ulits import logger_decorator, apply_decorator_for_all_methods
+from logger_config import logger
 
 
-def synchronizer(service: YandexCloudService) -> None:
+def synchronizer(service: YandexCloudService, sync_period: int = 60) -> None:
     while True:
         start = time.time()
 
         # Получаем имена файлов на облаке
         all_cloud_filenames: Set[str] = {
             file_info["name"]
-            for file_info in service.get_info().values()
+            for file_info in service.get_info()
             if file_info["path"].startswith(f"disk:/{CLOUD_DIR_NAME}/")
         }
         # Получаем имена локальных файлов
@@ -40,15 +45,32 @@ def synchronizer(service: YandexCloudService) -> None:
                 delete_result.get()
 
             elapsed_time = round(time.time() - start, 4)
-            logger.info(f"Синхронизация окончена. Время выполнения: {elapsed_time} секунд.")
-        time.sleep(int(SYNC_PERIOD))
+            logger.info(f"Синхронизация завершена. Время выполнения: {elapsed_time} секунд.")
+        time.sleep(sync_period)
 
 
 if __name__ == "__main__":
-    service = YandexCloudService(CLOUD_TOKEN, CLOUD_DIR_NAME, logger)
+    #подключает логер для необходимых методов
+    apply_decorator_for_all_methods(logger_decorator(logger))(YandexCloudService)
 
-    logger.info(f"Программа синхронизации файлов начинает работу с директорией '{LOCAL_DIR_PATH}'")
+    service = YandexCloudService(CLOUD_TOKEN, CLOUD_DIR_NAME)
+
+    greet_msg = f"Программа синхронизации файлов начинает работу с директорией '{LOCAL_DIR_PATH}'"
+    bye_msg = "Программа синхронизации завершена."
+    connection_err_msg = "Программа синхронизации завершена. Проверте подключение к интернету."
+
+    logger.info(greet_msg)
+    print(greet_msg)
+
     try:
-        synchronizer(service)
+        synchronizer(service, SYNC_PERIOD)
+    except ConnectionError as err:
+        logger.error(connection_err_msg)
+        print_to_stderr(connection_err_msg)
     except KeyboardInterrupt:
-        logger.info(f"Программа синхронизации завершена.")
+        logger.info(bye_msg)
+        print(bye_msg)
+        sys.exit(0)
+    except Exception as exp:
+        logger.error(f"Программа синхронизации завершена из за ошибки: {exp}")
+        print_to_stderr("Программа синхронизации завершена из за непредвиденной ошибки. Проверте логи.")
