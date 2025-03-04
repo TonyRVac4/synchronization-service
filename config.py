@@ -45,3 +45,12 @@ if os.path.isdir(LOG_FILE_PATH) or not LOG_FILE_PATH.endswith(".log"):
     print_to_stderr("Env variable 'LOG_FILE_PATH' must be a file with '.log' extension.")
 
 CLOUD_DIR_NAME: str = get_env_variable("CLOUD_DIR_NAME")
+
+
+settings = {
+    "LOCAL_DIR_PATH": LOCAL_DIR_PATH,
+    "CLOUD_TOKEN": CLOUD_TOKEN,
+    "SYNC_PERIOD": SYNC_PERIOD,
+    "LOG_FILE_PATH": LOG_FILE_PATH,
+    "CLOUD_DIR_NAME": CLOUD_DIR_NAME,
+}

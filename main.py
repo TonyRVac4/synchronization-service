@@ -1,76 +1,88 @@
 import os
 import sys
 import time
-from multiprocessing.pool import ThreadPool
-from typing import Set, List
+from multiprocessing.pool import ThreadPool, AsyncResult
 
 from requests.exceptions import ConnectionError
 
-from config import CLOUD_DIR_NAME, CLOUD_TOKEN, SYNC_PERIOD, LOCAL_DIR_PATH, print_to_stderr
+from config import settings, print_to_stderr
 from cloud_services import YandexCloudService
 from ulits import logger_decorator, apply_decorator_for_all_methods
 from logger_config import logger
 
 
-def synchronizer(service: YandexCloudService, sync_period: int = 60) -> None:
-    while True:
+def get_filenames_and_edit_time(dir_path: str) -> dict:
+    local_files = {}
+
+    for filename in os.listdir(dir_path):
+        file_path = os.path.join(dir_path, filename)
+
+        if os.path.isfile(file_path) and not filename.startswith("."):
+            local_files[filename] = round(os.path.getmtime(file_path), 2)
+
+    return local_files
+
+
+def synchronizer(service: YandexCloudService, local_dir_path: str) -> None:
+    cloud_data: dict = service.get_info()
+    local_data: dict = get_filenames_and_edit_time(local_dir_path)
+
+    local_filenames: set = set(local_data.keys())
+    cloud_filenames: set = set(cloud_data.keys())
+
+    paths_to_upload: list[str] = [
+        os.path.join(local_dir_path, filename)
+        for filename in local_filenames - cloud_filenames
+    ]
+    paths_to_reload: list[str] = [
+        os.path.join(local_dir_path, filename)
+        for filename in local_filenames & cloud_filenames
+        if cloud_data[filename] < local_data[filename]
+    ]
+    filenames_to_delete: list[str] = list(cloud_filenames - local_filenames)
+
+    if paths_to_upload + paths_to_reload + filenames_to_delete:
         start = time.time()
+        with ThreadPool(10) as pool:
+            logger.info("Синхронизация началась.")
 
-        # Получаем имена файлов на облаке
-        all_cloud_filenames: Set[str] = {
-            file_info["name"]
-            for file_info in service.get_info()
-            if file_info["path"].startswith(f"disk:/{CLOUD_DIR_NAME}/")
-        }
-        # Получаем имена локальных файлов
-        all_local_filenames: Set[str] = {
-            filename
-            for filename in os.listdir(LOCAL_DIR_PATH)
-            if os.path.isfile(os.path.join(LOCAL_DIR_PATH, filename)) and not filename.startswith(".")
-        }
-        # Определяем, какие файлы нужно загрузить и удалить
-        filenames_to_upload: Set[str] = all_local_filenames - all_cloud_filenames
-        filenames_to_delete: List[str] = list(all_cloud_filenames - all_local_filenames)
+            results: list[AsyncResult] = []
 
-        paths_to_upload: List[str] = [
-            os.path.join(LOCAL_DIR_PATH, filename) for filename in filenames_to_upload
-        ]
+            if paths_to_upload:
+                results.append(pool.map_async(service.load, paths_to_upload))
+            if paths_to_reload:
+                results.append(pool.map_async(service.reload, paths_to_reload))
+            if filenames_to_delete:
+                results.append(pool.map_async(service.delete, filenames_to_delete))
 
-        if paths_to_upload + filenames_to_delete:
-            with ThreadPool(10) as pool:
-                logger.info("Синхронизация началась.")
-                upload_result = pool.map_async(service.load, paths_to_upload)
-                delete_result = pool.map_async(service.delete, filenames_to_delete)
-                upload_result.get()
-                delete_result.get()
+            for res in results:
+                res.get()
 
-            elapsed_time = round(time.time() - start, 4)
-            logger.info(f"Синхронизация завершена. Время выполнения: {elapsed_time} секунд.")
-        time.sleep(sync_period)
+        elapsed_time = round(time.time() - start, 4)
+        logger.info(f"Синхронизация завершена. Время выполнения: {elapsed_time} секунд.")
 
 
-if __name__ == "__main__":
-    #подключает логер для необходимых методов
+def main() -> None:
     apply_decorator_for_all_methods(logger_decorator(logger))(YandexCloudService)
+    yandex_service = YandexCloudService(settings["CLOUD_TOKEN"], settings["CLOUD_DIR_NAME"])
 
-    service = YandexCloudService(CLOUD_TOKEN, CLOUD_DIR_NAME)
-
-    greet_msg = f"Программа синхронизации файлов начинает работу с директорией '{LOCAL_DIR_PATH}'"
-    bye_msg = "Программа синхронизации завершена."
-    connection_err_msg = "Программа синхронизации завершена. Проверте подключение к интернету."
-
-    logger.info(greet_msg)
-    print(greet_msg)
-
+    logger.info(f"Программа синхронизации файлов начинает работу с директорией '{settings['LOCAL_DIR_PATH']}'")
+    print(f"Программа синхронизации файлов начинает работу с директорией '{settings['LOCAL_DIR_PATH']}'")
     try:
-        synchronizer(service, SYNC_PERIOD)
-    except ConnectionError as err:
-        logger.error(connection_err_msg)
-        print_to_stderr(connection_err_msg)
+        while True:
+            synchronizer(yandex_service, settings["LOCAL_DIR_PATH"])
+            time.sleep(settings["SYNC_PERIOD"])
+    except ConnectionError:
+        logger.error("Программа синхронизации завершена. Проверте подключение к интернету.")
+        print_to_stderr("Программа синхронизации завершена. Проверте подключение к интернету.")
     except KeyboardInterrupt:
-        logger.info(bye_msg)
-        print(bye_msg)
+        logger.info("Программа синхронизации завершена.")
+        print("Программа синхронизации завершена.")
         sys.exit(0)
     except Exception as exp:
         logger.error(f"Программа синхронизации завершена из за ошибки: {exp}")
         print_to_stderr("Программа синхронизации завершена из за непредвиденной ошибки. Проверте логи.")
+
+
+if __name__ == "__main__":
+    main()
