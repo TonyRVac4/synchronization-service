@@ -2,6 +2,7 @@ import os
 import requests
 from abc import ABC, abstractmethod
 from typing import Any
+from datetime import datetime
 
 
 class AbstractCloudService(ABC):
@@ -105,9 +106,9 @@ class YandexCloudService(AbstractCloudService):
 
         result = self.__get_response_message(request.status_code)
 
+        result["message"] = f"Файл '{filename}' успешно записан."
         if overwrite:
             result["message"] = f"Файл '{filename}' успешно перезаписан."
-        result["message"] = f"Файл '{filename}' успешно записан."
         return result
 
     def load(self, path) -> dict[str, Any]:
@@ -133,26 +134,20 @@ class YandexCloudService(AbstractCloudService):
             result["message"] = f"Файл '{filename}' успешно удален"
         return result
 
-    def get_info(self) -> list[dict]:
+    def get_info(self) -> dict[str: str]:
         request = requests.get(
             url=f"{self.__base_url}/files",
             headers=self.__headers,
         )
+
         if request.status_code == 200:
             requested_data: list[dict] = request.json()["items"]
-            required_data: list = []
-
+            required_data: dict = {}
             for file in requested_data:
-                required_data.append(
-                    {
-                        "name": file["name"],
-                        "path": file["path"],
-                        "size": file["size"],
-                        "media_type": file["media_type"],
-                        "created": file["created"],
-                        "modified": file["modified"],
-                    }
-                )
+                if file["path"].startswith(f"disk:/{self.__remote_dir_name}"):
+                    timestamp = datetime.fromisoformat(file["modified"]).timestamp()
+                    required_data[file["name"]] = round(timestamp, 2)
+
             return required_data
         else:
             return self.__get_response_message(request.status_code)
